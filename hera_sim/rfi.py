@@ -1,7 +1,7 @@
 """A module for generating realistic HERA RFI."""
 
-import numpy as np
 import aipy
+import numpy as np
 
 
 class RfiStation:
@@ -20,6 +20,7 @@ class RfiStation:
         timescale (scalar): seconds, default=100.
             timescale for sinusoidal variation in transmission amplitude'''
     """
+
     def __init__(self, fq0, duty_cycle=1.0, strength=100.0, std=10.0, timescale=100.0):
         self.fq0 = fq0
         self.duty_cycle = duty_cycle
@@ -94,6 +95,7 @@ HERA_RFI_STATIONS = [
     # (.2000, 1., 100., 0., 10000),
 ]
 
+
 # XXX reverse lsts and fqs?
 def rfi_stations(fqs, lsts, stations=HERA_RFI_STATIONS, rfi=None):
     """
@@ -158,6 +160,7 @@ def rfi_impulse(fqs, lsts, rfi=None, chance=0.001, strength=20.0):
         rfi[impulse_times] += impulses
     return rfi
 
+
 # XXX reverse lsts and fqs?
 def rfi_scatter(fqs, lsts, rfi=None, chance=0.0001, strength=10, std=10):
     """
@@ -187,6 +190,6 @@ def rfi_scatter(fqs, lsts, rfi=None, chance=0.0001, strength=10, std=10):
     assert rfi.shape == (lsts.size, fqs.size)
     rfis = np.where(np.random.uniform(size=rfi.size) <= chance)[0]
     rfi.flat[rfis] += np.random.normal(strength, std) * np.exp(
-        1j * np.random.uniform(size=rfis.size)
+        2*np.pi * 1j * np.random.uniform(size=rfis.size)
     )
     return rfi
