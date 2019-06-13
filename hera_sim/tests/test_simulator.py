@@ -7,13 +7,16 @@ elsewhere.
 import shutil
 import tempfile
 from os import path
+from pyuvdata import UVData
+import copy
 
 import numpy as np
 from nose.tools import raises, assert_raises
 
 from hera_sim.foregrounds import diffuse_foreground
 from hera_sim.noise import thermal_noise, HERA_Tsky_mdl
-from hera_sim.simulate import Simulator
+from hera_sim.simulate import Simulator, run_simulate
+from hera_sim.data import DATA_PATH
 
 
 def create_sim(autos=False):
@@ -156,3 +159,28 @@ def test_adding_vis_but_also_returning():
 
     vis = sim.add_foregrounds("diffuse_foreground", Tsky_mdl=HERA_Tsky_mdl['xx'], ret_vis=True)
     np.testing.assert_array_almost_equal(vis, sim.data.data_array)
+
+
+def test_run_simulate():
+    # load data
+    filepath = path.join(DATA_PATH, "PyGSM_Jy_downselect.uvh5")
+    uv = UVData()
+    uv.read(filepath)
+    bl = (23, 24, 'xx')
+
+    # test add uvd
+    uvd = run_simulate(uv, add_uvd=uv, add_amp=2.0, inplace=False)
+    np.testing.assert_array_almost_equal(uv.get_data(bl) * 3.0, uvd.get_data(bl))
+
+    # test add noise
+    uvd = run_simulate(uv, add_noise=True, noise_amp=1.0, Trx=100.0, inplace=False, seed=0)
+    assert not np.any(np.isclose(uvd.get_data(bl) - uv.get_data(bl), 0.0)) # assert data is different
+
+    # test add xtalk
+    uvd = run_simulate(uv, add_xtalk=True, xtalk_amp=1e-3, xtalk_dly=500., xtalk_phs=0., seed=0, inplace=False)
+    assert not np.any(np.isclose(uvd.get_data(bl) - uv.get_data(bl), 0.0)) # assert data is different
+
+    # test add reflection
+    uvd = run_simulate(uv, add_ref=True, ref_amp=1e-3, ref_dly=500., ref_phs=0., seed=0, inplace=False)
+    assert not np.any(np.isclose(uvd.get_data(bl) - uv.get_data(bl), 0.0)) # assert data is different
+

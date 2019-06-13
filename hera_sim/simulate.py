@@ -7,14 +7,17 @@ import functools
 import inspect
 import sys
 import warnings
+import copy
 
 import numpy as np
 from cached_property import cached_property
 from pyuvdata import UVData
+from pyuvdata import utils as uvutils
 from astropy import constants as const
 
 from . import io
 from . import sigchain
+from . import noise
 from .version import version
 
 
@@ -430,4 +433,177 @@ class Simulator:
                 vis=self.data.data_array[blt_ind, 0, :, pol_ind],
                 xtalk=xtalk
             )
+
+
+def run_simulate(uvd, add_uvd=None, add_amp=1.0, bls=None, pols=None, filetype='uvh5',
+                 add_noise=False, noise_amp=1.0, Trx=100.0, add_xtalk=False, xtalk_amp=None,
+                 xtalk_dly=None, xtalk_phs=None, add_ref=False, ref_amp=None, ref_dly=None, ref_phs=None,
+                 seed=0, run_check=True, inplace=True):
+    """
+    A user interface for utilizing the functionality in hera_sim.
+
+    uvd --> add_noise --> add_xtalk --> add_ref --> output
+
+    Args:
+        uvd (str or UVData): A data object or filepath to simulate on top of.
+        add_uvd (str or UVData): Data object to add to uvd.
+        add_amp (float): Amplitude with which to multiply add_uvd data before summing with uvd.
+        bls (list of tuples): Baseline selection for read-in if inputs are filepaths
+        pols (list of str): Polarization selection for read-in if inputs are filepaths
+        filetype (str): Filetype for read-in
+        add_noise (bool): If True, add thermal noise to visibilities using auto-correlation in uvd.
+        noise_amp (float): Multiplicative factor of noise before summing with uvd
+        Trx (float): Reciever temperature in Kelvin (frequency independent)
+        add_xtalk (bool): If True, add crosstalk (aka cross coupling or mutual coupling) to data
+            using auto-correlation in uvd.
+        xtalk_amp : (float or list of floats): amplitude with which to insert xtalk. A list of amps
+            can be fed for multiple xtalk injections.
+        xtalk_dly : (float or list of floats): delays [ns] to insert xtalk. A list of delays
+            can be fed for multiple xtalk injections.
+        xtalk_phs : (float or list of floats): Phase [radian] to insert xtalk. A list of phases
+            can be fed for multiple xtalk injections.
+        add_ref (bool): If True, add reflections to data.
+        ref_amp (float or list of floats): Amplitude with which to insert reflection. A list
+            can be fed for multiple reflections.
+        ref_dly (float or list of floats): Delays [ns] to insert reflections. A list can be
+            fed for multiple reflections.
+        ref_phs (float or list of floats): Phases [radian] with which to insert reflections. A list can
+            be fed for multiple reflections.
+        seed (int): Random seed to use at the start of each component block.
+        run_check (bool): If True, perform UVData check before return or write-out
+        inplace (bool): If True, add components in place, otherwise make and return a deepcopy
+    """
+    # load uvd if necessary
+    if isinstance(uvd, (str, np.str)):
+        _uvd = UVData()
+        _uvd.read(uvd, bls=bls, polarizations=pols)
+        uvd = _uvd
+    else:
+        if not inplace:
+            uvd = copy.deepcopy(uvd)
+
+    # get metadata
+    freqs = np.unique(uvd.freq_array) / 1e9
+    lsts = []
+    for l in uvd.lst_array:
+        if l not in lsts:
+            lsts.append(l)
+    lsts = np.array(lsts)
+    antpos, ants = uvd.get_ENU_antpos(center=True, pick_data_ants=False)
+    Nants = len(ants)
+    antpos_d = dict(zip(ants, antpos))
+    times = np.unique(uvd.time_array)
+    Ntimes = len(times)
+    Nfreqs = len(freqs)
+    antpairs = uvd.get_antpairpols()
+    inttime = np.median(uvd.integration_time)
+
+    # get baseline info
+    bl_inds, pol_inds = {}, {}
+    for ap in antpairs:
+        # get baseline info
+        pol = ap[-1]
+        bl_ind = uvd.antpair2ind(ap, ordered=False)
+        pol_ind = np.where(uvd.polarization_array == uvutils.polstr2num(pol))[0][0]
+        bl_inds[ap] = bl_ind
+        pol_inds[ap] = pol_ind
+
+    # add uvd if necessary
+    if add_uvd is not None:
+        # if str, load them
+        if isinstance(add_uvd, (str, np.str)):
+            _add_uvd = UVData()
+            _add_uvd.read(add_uvd, bls=bls, polarizations=pols)
+            add_uvd = _add_uvd
+
+        # iterate over antpairs
+        _antpairs = add_uvd.get_antpairpols()
+        for ap in _antpairs:
+            if ap not in antpairs:
+                continue
+            uvd.data_array[bl_inds[ap], 0, :, pol_inds[ap]] += add_uvd.get_data(ap) * add_amp
+
+    # get first auto-correlation if needed
+    if add_noise or add_xtalk:
+        autokeys = [k for k in antpairs if k[0] == k[1]]
+        autocorr_Jy = uvd.get_data(autokeys[0])
+        omega_p = noise.bm_poly_to_omega_p(freqs)
+        autocorr_K = autocorr_Jy * noise.jy2T(freqs, omega_p) / 1e3
+
+    # add noise
+    if add_noise:
+        # set seed
+        np.random.seed(seed)
+
+        # iterate over baselines
+        for ap in antpairs:
+            # construct Noise
+            N = noise.sky_noise_jy(autocorr_K + Trx, freqs, lsts, omega_p, inttime=inttime) * noise_amp
+            if ap[0] == ap[1]:
+                N = np.abs(N)
+            uvd.data_array[bl_inds[ap], 0, :, pol_inds[ap]] += N
+
+
+    # add xtalk
+    if add_xtalk:
+        # set seed
+        np.random.seed(seed)
+
+        # parse xtalk parameters
+        if isinstance(xtalk_amp, (float, np.float, int, np.int)):
+            xtalk_amp = [xtalk_amp]
+        if isinstance(xtalk_dly, (float, np.float, int, np.int)):
+            xtalk_dly = [xtalk_dly]
+        if isinstance(xtalk_phs, (float, np.float, int, np.int)):
+            xtalk_phs = [xtalk_phs]
+
+        # generate xtalk model
+        X = np.zeros_like(autocorr_Jy, np.complex128)
+
+        # iterate over xtalk injections
+        for i in range(len(xtalk_dly)):
+            X += sigchain.gen_cross_coupling_xtalk(freqs, autocorr_Jy, amp=xtalk_amp[i],
+                                                   dly=xtalk_dly[i], phs=xtalk_phs[i])
+
+        # iterate over antpairs
+        for ap in antpairs:
+            if ap[0] != ap[1]:
+                uvd.data_array[bl_inds[ap], 0, :, pol_inds[ap]] += X
+
+    # add reflections
+    if add_ref:
+        # set seed
+        np.random.seed(seed)
+
+        # parse reflection parameters
+        if isinstance(ref_amp, (float, np.float, int, np.int)):
+            ref_amp = [ref_amp]
+        if isinstance(ref_dly, (float, np.float, int, np.int)):
+            ref_dly = [ref_dly]
+        if isinstance(ref_phs, (float, np.float, int, np.int)):
+            ref_phs = [ref_phs]
+
+        # build up gains
+        gains = dict([(ant, np.ones((Ntimes, Nfreqs), np.complex128)) for ant in ants])
+        for amp, dly, phs in zip(ref_amp, ref_dly, ref_phs):
+            _amp = [amp] * Nants
+            _dly = [dly] * Nants
+            _phs = [phs] * Nants
+            _gain = sigchain.gen_reflection_gains(freqs, ants, amp=_amp, dly=_dly, phs=_dly, conj=False)
+            for key in _gain:
+                if key in gains:
+                    gains[key] *= _gain[key]
+
+        # multiply into data
+        for ap in antpairs:
+            uvd.data_array[bl_inds[ap], 0, :, pol_inds[ap]] = sigchain.apply_gains(uvd.get_data(ap), gains, ap)
+
+    if run_check:
+        uvd.check()
+
+    return uvd
+
+
+
+
 
