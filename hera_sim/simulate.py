@@ -173,10 +173,10 @@ class Simulator:
                               'rfi_impulse':'add_rfi',
                               'rfi_scatter':'add_rfi',
                               'rfi_dtv':'add_rfi',
-                              'gains':'add_gains',
-                              'sigchain_reflections':'add_sigchain_reflections',
                               'gen_whitenoise_xtalk':'add_xtalk',
-                              'gen_cross_coupling_xtalk':'add_xtalk'
+                              'gen_cross_coupling_xtalk':'add_xtalk',
+                              'gains':'add_gains',
+                              'sigchain_reflections':'add_sigchain_reflections'
                               } )
 
     def __init__(

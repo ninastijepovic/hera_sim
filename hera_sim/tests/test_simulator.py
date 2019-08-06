@@ -158,7 +158,21 @@ def test_adding_vis_but_also_returning():
     vis = sim.add_foregrounds("diffuse_foreground", Tsky_mdl=HERA_Tsky_mdl['xx'], ret_vis=True)
     np.testing.assert_array_almost_equal(vis, sim.data.data_array, decimal=5)
 
+def test_returning_vis_and_cmp():
+    sim = create_sim()
+    vis, eor = sim.add_eor("noiselike_eor", ret_vis=True, ret_cmp=True)
+    
+    # these should be identical
+    assert np.all(vis==eor)
 
+    # now do gains
+    new_vis, gains = sim.add_gains(ret_vis=True, ret_cmp=True)
+
+    # check that the behavior is as expected
+    assert np.all(np.isclose(new_vis, sim.data.data_array - vis))
+    assert np.all(np.isclose(sim.data.data_array, eor*gains))
+
+# need python 3.4 or newer to use run_sim
 if sys.version_info.major < 3 or \
    sys.version_info.major > 3 and sys.version_info.minor < 4:
     @raises(VersionError)
@@ -168,6 +182,7 @@ if sys.version_info.major < 3 or \
         sim.run_sim(**sim_params)
 else:
     def test_run_sim():
+        # choose some simulation components
         sim_params = {
                 "diffuse_foreground": {"Tsky_mdl":HERA_Tsky_mdl['xx']},
                 "pntsrc_foreground": {"nsrcs":500, "Smin":0.1},
@@ -176,6 +191,7 @@ else:
                 "rfi_scatter": {"chance":0.99, "strength":5.7, "std":2.2},
                 "rfi_impulse": {"chance":0.99, "strength":17.22},
                 "rfi_stations": {},
+                "rfi_dtv": {},
                 "gains": {"gain_spread":0.05},
                 "sigchain_reflections": {"amp":[0.5,0.5],
                                          "dly":[14,7],
@@ -185,9 +201,27 @@ else:
 
         sim = create_sim()
     
-        sim.run_sim(**sim_params)
+        # let's get the simulation components
+        sim_components = sim.run_sim(ret_sim_components=True, **sim_params)
 
         assert not np.all(np.isclose(sim.data.data_array, 0))
+
+        # make sure that we can reconstruct the simulated vis with components
+        # first note which ones are multiplicative
+        is_mult = ('gains', 'sigchain_reflections')
+
+        # initialize an array to store the visibilities in
+        vis = np.zeros(sim.data.data_array.shape, dtype=np.complex)
+        
+        # loop over the components
+        for model, component in sim_components.items():
+            if model in is_mult:
+                vis *= component
+            else:
+                vis += component
+
+        # these might not be *exactly* equal, but they should be close
+        assert np.all(np.isclose(vis, sim.data.data_array))
 
         # instantiate a mock simulation file
         tmp_sim_file = tempfile.mkstemp()[1]
