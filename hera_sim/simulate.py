@@ -63,20 +63,25 @@ class _model(object):
             add_vis = kwargs.pop("add_vis", True)
 
             ret_vis = kwargs.pop("ret_vis", False)
+
+            ret_cmp = kwargs.pop("ret_cmp", False)
             if not add_vis:
                 ret_vis = True
 
-            if ret_vis:
+            if ret_vis or ret_cmp:
                 initial_vis = obj.data.data_array.copy()
 
             # If this is a multiplicative model, and *no* additive models
             # have been called, raise a warning.
             if self.multiplicative and np.all(obj.data.data_array == 0):
-                warnings.warn("You are trying to determine visibilities that depend on preceding visibilities, but " +
-                              "no previous vis have been created.")
-            elif not self.multiplicative and (hasattr(obj, "_added_models") and any([x[1] for x in obj._added_models])):
+                warnings.warn("You are trying to determine visibilities that " \
+                              "depend on preceding visibilities, but no " \
+                              "previous vis have been created.")
+            elif not self.multiplicative and (hasattr(obj, "_added_models") \
+                                         and any([x[1] for x in obj._added_models])):
                 # some of the previous models were multiplicative, and now we're trying to add.
-                warnings.warn("You are adding absolute visibilities _after_ determining visibilities that should " +
+                warnings.warn("You are adding absolute visibilities _after_ " \
+                              "determining visibilities that should " \
                               "depend on these. Please re-consider.")
 
             if "model" in inspect.getargspec(func)[0]: # TODO: needs to be updated for python 3
@@ -120,15 +125,31 @@ class _model(object):
                     obj._added_models += [(name, self.multiplicative)]
 
             # Here actually return something.
-            if ret_vis:
-                res = obj.data.data_array - initial_vis
+            if ret_vis or ret_cmp:
+                vis = obj.data.data_array - initial_vis
+
+                if ret_cmp:
+                    if self.multiplicative:
+                        # XXX this will return infinite values for any entry
+                        # XXX in initial_vis that is 0
+                        sim_cmp = obj.data.data_array/initial_vis
+                    else:
+                        sim_cmp = vis
 
                 # If we don't want to add the visibilities, set them back
                 # to the original before returning.
                 if not add_vis:
                     obj.data.data_array[:] = initial_vis[:]
 
-                return res
+                if ret_vis and ret_cmp:
+                    # return both as a tuple
+                    return vis, sim_cmp
+                elif ret_cmp:
+                    # just return the sim component
+                    return sim_cmp
+                else:
+                    # just return the visibility
+                    return vis
 
         return new_func
 
@@ -172,33 +193,46 @@ class Simulator:
         Initialise the object either from file or by creating an empty object.
 
         Args:
-            data_filename (str, optional): filename of data to be read, in ``pyuvdata``-compatible format. If not
-                given, an empty :class:`pyuvdata.UVdata` object will be created from scratch. *Deprecated since
-                v0.0.1, will be removed in v0.1.0. Use `data` instead*.
-            data (str or :class:`UVData`): either a string pointing to data to be read (i.e. the same as
-                `data_filename`), or a UVData object.
-            refresh_data (bool, optional): if reading data from file, this can be used to manually set the data to zero,
-                and remove flags. This is useful for using an existing file as a template, but not using its data.
-            n_freq (int, optional): if `data_filename` not given, this is required and sets the number of frequency
-                channels.
-            n_times (int, optional): if `data_filename` is not given, this is required and sets the number of obs
-                times.
-            antennas (dict, optional): if `data_filename` not given, this is required. See docs of
-                :func:`~io.empty_uvdata` for more details.
+            data_filename (str, optional): filename of data to be read, in 
+            ``pyuvdata``-compatible format. If not given, an empty 
+            :class:`pyuvdata.UVdata` object will be created from scratch. 
+            *Deprecated since v0.0.1, will be removed in v0.1.0. Use `data` instead*.
+            
+            data (str or :class:`UVData`): either a string pointing to data to 
+            be read (i.e. the same as `data_filename`), or a UVData object.
+            
+            refresh_data (bool, optional): if reading data from file, this can 
+            be used to manually set the data to zero, and remove flags. This is 
+            useful for using an existing file as a template, but not using its data.
+            
+            n_freq (int, optional): if `data_filename` not given, this is required 
+            and sets the number of frequency channels.
+
+            n_times (int, optional): if `data_filename` is not given, this is 
+            required and sets the number of observation times.
+
+            antennas (dict, optional): if `data_filename` not given, this is 
+            required. See docs of :func:`~io.empty_uvdata` for more details.
 
         Other Args:
-            All other arguments are sent either to :func:`~UVData.read` (if `data_filename` is given) or
-            :func:`~io.empty_uvdata` if not. These all have default values as defined in the documentation for those
+            All other arguments are sent either to :func:`~UVData.read` (if 
+            `data_filename` is given) or :func:`~io.empty_uvdata` if not. These 
+            all have default values as defined in the documentation for those
             objects, and are therefore optional.
 
         Raises:
-            :class:`CompatibilityException`: if the created/imported data has attributes which are in conflict
-                with the assumptions made in the models of this Simulator.
+            :class:`CompatibilityException`: if the created/imported data has 
+            attributes which are in conflict with the assumptions made in the 
+            models of this Simulator.
+
+            :class:'VersionError': if the `run_sim` method is used with a version
+            of python that is not 3.4 or newer.
 
         """
 
         if data_filename is not None:
-            warnings.warn("`data_filename` is deprecated, please use `data` instead", DeprecationWarning)
+            warnings.warn("`data_filename` is deprecated, please use `data` instead", 
+                          DeprecationWarning)
             
         self.data_filename = data_filename
 
@@ -266,8 +300,11 @@ class Simulator:
 
         Args:
             filename (str): filename to write to.
-            file_type: (str): one of "miriad", "uvfits" or "uvh5" (i.e. any of the supported write methods of
-                :class:`pyuvdata.UVData`) which determines which write method to call.
+            
+            file_type: (str): one of "miriad", "uvfits" or "uvh5" (i.e. any of 
+            the supported write methods of :class:`pyuvdata.UVData`) which 
+            determines which write method to call.
+            
             **kwargs: keyword arguments sent directly to the write method chosen.
         """
         try:
@@ -277,7 +314,8 @@ class Simulator:
 
     def _check_compatibility(self):
         """
-        Merely checks the compatibility of the data with the assumptions of the simulator class and its modules.
+        Merely checks the compatibility of the data with the assumptions of the 
+        simulator class and its modules.
         """
         if self.data.phase_type != "drift":
             raise CompatibilityException("The phase_type of the data must be 'drift'.")
@@ -298,13 +336,22 @@ class Simulator:
         Add an EoR-like model to the visibilities.
 
         Args:
-            model (str or callable): either a string name of a model function existing in :mod:`~hera_sim.eor`, or
-                a callable which has the signature ``fnc(lsts, fqs, bl_vec, **kwargs)``.
-            ret_vis (bool, optional): whether to return the visibilities that are being added to to the base
-                data as a new array. Default False.
-            add_vis (bool, optional): whether to add the calculated visibilities to the underlying data array.
-                Default True.
-            **kwargs: keyword arguments sent to the EoR model function, other than `lsts`, `fqs` and `bl_vec`.
+            model (str or callable): either a string name of a model function 
+            existing in :mod:`~hera_sim.eor`, or a callable which has the 
+            signature ``fnc(lsts, fqs, bl_vec, **kwargs)``.
+            
+            ret_vis (bool, optional): whether to return the visibilities that are 
+            being added to to the base data as a new array. Default False.
+            
+            add_vis (bool, optional): whether to add the calculated visibilities 
+            to the underlying data array. Default True.
+            
+            ret_cmp (bool, optional): whether to return the simulated component
+            being added to the base data. This functions identically to `ret_vis`
+            for all non-multiplicative models. Default False.
+            
+            **kwargs: keyword arguments sent to the EoR model function, other than 
+            `lsts`, `fqs` and `bl_vec`.
         """
         # frequencies come from zeroths spectral window
         fqs = self.data.freq_array[0] * 1e-9
@@ -321,13 +368,22 @@ class Simulator:
         Add a foreground model to the visibilities.
 
         Args:
-            model (str or callable): either a string name of a model function existing in :mod:`~hera_sim.foregrounds`,
-                or a callable which has the signature ``fnc(lsts, fqs, bl_vec, **kwargs)``.
-            ret_vis (bool, optional): whether to return the visibilities that are being added to to the base
-                data as a new array. Default False.
-            add_vis (bool, optional): whether to add the calculated visibilities to the underlying data array.
-                Default True.
-            **kwargs: keyword arguments sent to the foregournd model function, other than `lsts`, `fqs` and `bl_vec`.
+            model (str or callable): either a string name of a model function 
+            existing in :mod:`~hera_sim.foregrounds`, or a callable which has 
+            the signature ``fnc(lsts, fqs, bl_vec, **kwargs)``.
+            
+            ret_vis (bool, optional): whether to return the visibilities that 
+            are being added to to the base data as a new array. Default False.
+            
+            add_vis (bool, optional): whether to add the calculated visibilities 
+            to the underlying data array. Default True.
+            
+            ret_cmp (bool, optional): whether to return the simulated component
+            being added to the base data. This functions identically to `ret_vis`
+            for all non-multiplicative models. Default False. 
+            
+            **kwargs: keyword arguments sent to the foreground model function, 
+            other than `lsts`, `fqs` and `bl_vec`.
         """
         # frequencies come from zeroth spectral window
         fqs = self.data.freq_array[0] * 1e-9
@@ -344,13 +400,22 @@ class Simulator:
         Add thermal noise to the visibilities.
 
         Args:
-            model (str or callable): either a string name of a model function existing in :mod:`~hera_sim.noise`,
-                or a callable which has the signature ``fnc(lsts, fqs, bl_len_ns, omega_p, **kwargs)``.
-            ret_vis (bool, optional): whether to return the visibilities that are being added to to the base
-                data as a new array. Default False.
-            add_vis (bool, optional): whether to add the calculated visibilities to the underlying data array.
-                Default True.
-            **kwargs: keyword arguments sent to the noise model function, other than `lsts`, `fqs` and `bl_len_ns`.
+            model (str or callable): either a string name of a model function 
+            existing in :mod:`~hera_sim.noise`, or a callable which has the 
+            signature ``fnc(lsts, fqs, bl_len_ns, omega_p, **kwargs)``.
+            
+            ret_vis (bool, optional): whether to return the visibilities that 
+            are being added to to the base data as a new array. Default False.
+            
+            add_vis (bool, optional): whether to add the calculated visibilities 
+            to the underlying data array. Default True.
+            
+            ret_cmp (bool, optional): whether to return the simulated component
+            being added to the base data. This functions identically to `ret_vis`
+            for all non-multiplicative models. Default False.
+            
+            **kwargs: keyword arguments sent to the noise model function, other 
+            than `lsts`, `fqs` and `bl_len_ns`.
         """
         for ant1, ant2, pol, blt_ind, pol_ind in self._iterate_antpair_pols():
             lsts = self.data.lst_array[blt_ind]
@@ -365,13 +430,22 @@ class Simulator:
         Add RFI to the visibilities.
 
         Args:
-            model (str or callable): either a string name of a model function existing in :mod:`~hera_sim.rfi`,
-                or a callable which has the signature ``fnc(lsts, fqs, **kwargs)``.
-            ret_vis (bool, optional): whether to return the visibilities that are being added to to the base
-                data as a new array. Default False.
-            add_vis (bool, optional): whether to add the calculated visibilities to the underlying data array.
-                Default True.
-            **kwargs: keyword arguments sent to the RFI model function, other than `lsts` or `fqs`.
+            model (str or callable): either a string name of a model function 
+            existing in :mod:`~hera_sim.rfi`, or a callable which has the 
+            signature ``fnc(lsts, fqs, **kwargs)``.
+            
+            ret_vis (bool, optional): whether to return the visibilities that 
+            are being added to to the base data as a new array. Default False.
+            
+            add_vis (bool, optional): whether to add the calculated visibilities 
+            to the underlying data array. Default True.
+            
+            ret_cmp (bool, optional): whether to return the simulated component
+            being added to the base data. This functions identically to `ret_vis`
+            for all non-multiplicative models. Default False.
+            
+            **kwargs: keyword arguments sent to the RFI model function, other 
+            than `lsts` or `fqs`.
         """
         for ant1, ant2, pol, blt_ind, pol_ind in self._iterate_antpair_pols():
             lsts = self.data.lst_array[blt_ind]
@@ -392,10 +466,16 @@ class Simulator:
         Currently this consists of a bandpass, and cable delays & phases.
 
         Args:
-            ret_vis (bool, optional): whether to return the visibilities that are being added to to the base
-                data as a new array. Default False.
-            add_vis (bool, optional): whether to add the calculated visibilities to the underlying data array.
-                Default True.
+            ret_vis (bool, optional): whether to return the visibilities that are 
+            being added to to the base data as a new array. Default False.
+            
+            add_vis (bool, optional): whether to add the calculated visibilities 
+            to the underlying data array. Default True.
+            
+            ret_cmp (bool, optional): whether to return the simulated component
+            being added to the base data. This functions identically to `ret_vis`
+            for all non-multiplicative models. Default False.
+            
             **kwargs: keyword arguments sent to the gen_gains method in :mod:~`hera_sim.sigchain`.
         """
 
@@ -417,7 +497,19 @@ class Simulator:
 
         Args:
             ants: list of antenna numbers to add reflections to
-            **kwargs: keyword arguments sent to the gen_reflection_gains method in :mod:~`hera_sim.sigchain`.
+
+            ret_vis (bool, optional): whether to return the visibilities that are 
+            being added to to the base data as a new array. Default False.
+            
+            add_vis (bool, optional): whether to add the calculated visibilities 
+            to the underlying data array. Default True.
+            
+            ret_cmp (bool, optional): whether to return the simulated component
+            being added to the base data. This functions identically to `ret_vis`
+            for all non-multiplicative models. Default False.
+
+            **kwargs: keyword arguments sent to the gen_reflection_gains method 
+            in :mod:~`hera_sim.sigchain`.
         """
         if ants is None:
             ants = self.data.get_ants()
@@ -438,7 +530,18 @@ class Simulator:
         Add crosstalk to visibilities.
 
         Args:
+            ret_vis (bool, optional): whether to return the visibilities that are 
+            being added to to the base data as a new array. Default False.
+            
+            add_vis (bool, optional): whether to add the calculated visibilities 
+            to the underlying data array. Default True.
+            
+            ret_cmp (bool, optional): whether to return the simulated component
+            being added to the base data. This functions identically to `ret_vis`
+            for all non-multiplicative models. Default False.
+            
             bls (list of 3-tuples, optional): ant-pair-pols to add xtalk to.
+            
             **kwargs: keyword arguments sent to the model :meth:~`hera_sim.sigchain.{model}`.
         """
         freqs = self.data.freq_array[0]
@@ -458,7 +561,7 @@ class Simulator:
             )
     
     
-    def run_sim(self, sim_file=None, **sim_params):
+    def run_sim(self, sim_file=None, ret_sim_components=False, **sim_params):
         """
         Accept a dictionary or YAML file of simulation parameters and add in
         all of the desired simulation components to the Simulator object.
@@ -475,7 +578,17 @@ class Simulator:
             One (and *only* one) of the above arguments must be provided. If 
             *both* sim_file and sim_params are provided, then this function
             will raise an AssertionError.
+
+            ret_sim_components (bool, optional): whether to return the simulation
+                components. If True, then run_sim will return a dictionary of
+                simulation components. For multiplicative effects (e.g. gains
+                and sigchain reflections), these components will be dimensionless.
+                Default False.
         """
+
+        # if user wants sim components back, make a dictionary to hold them
+        if ret_sim_components:
+            sim_components = {}
 
         # keep track of which components don't use models
         uses_no_model = []
@@ -542,7 +655,14 @@ class Simulator:
                 add_component = getattr(self, self.SIMULATION_COMPONENTS[model])
                 params = sim_params[model]
                 if model in uses_no_model:
-                    add_component(**params)
+                    # XXX is there a better way to do this?
+                    if ret_sim_components:
+                        sim_components[model] = add_component(ret_cmp=True, **params)
+                    else:
+                        add_component(**params)
                 else:
-                    add_component(model, **params)
+                    if ret_sim_components:
+                        sim_components[model] = add_component(model, ret_cmp=True, **params)
+                    else:
+                        add_component(model, **params)
 
