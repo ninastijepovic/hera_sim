@@ -524,7 +524,15 @@ class Simulator:
                 bl=(ant1, ant2)
             )
 
-    @_model('sigchain', multiplicative=True)
+    # Originally, this had multiplicative=True; this is only (somewhat) the case
+    # for cross-coupling xtalk. Note that the sigchain.add_xtalk method simply
+    # adds the crosstalk to the original visibility; the only sense in which
+    # cross-coupling xtalk is multiplicative is that the xtalk visibility is
+    # computed from an existing auto-correlation visibility (it is scaled by
+    # some complex number). The decision to remove the multiplicative flag was
+    # based on the desire to make the ret_cmp functionality of the _model
+    # decorator work as intended.
+    @_model('sigchain')
     def add_xtalk(self, model='gen_whitenoise_xtalk', bls=None, **kwargs):
         """
         Add crosstalk to visibilities.
