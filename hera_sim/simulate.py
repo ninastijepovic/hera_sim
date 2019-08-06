@@ -665,4 +665,6 @@ class Simulator:
                         sim_components[model] = add_component(model, ret_cmp=True, **params)
                     else:
                         add_component(model, **params)
-
+        # return the simulation components if desired
+        if ret_sim_components:
+            return sim_components
